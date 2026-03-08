@@ -1,0 +1,68 @@
+chains:
+  ethereum:
+    enabled: true
+    ws_url: "${ALCHEMY_WS_URL}"
+    reconnect_delay_seconds: 5
+    max_reconnect_attempts: 0        # 0 = infinite
+    subscription_types:
+      - pending_transactions
+      - new_blocks
+
+  bitcoin:
+    enabled: false                   # enable when Bitcoin node available
+    rpc_host: "${BITCOIN_RPC_HOST}"
+    rpc_port: 8332
+    zmq_tx_url: "tcp://localhost:28333"
+    zmq_block_url: "tcp://localhost:28332"
+
+filters:
+  value:
+    eth_min_wei: "1000000000000000000"   # 1 ETH
+    btc_min_sat: 100000000               # 1 BTC
+  gas:
+    track_above_gwei: 50
+  contract_interaction:
+    enabled: true
+    tag_erc20: true
+    tag_erc721: true
+    tag_dex: true
+  recirculation:
+    enabled: true
+    hop_depth: 5
+    time_window_seconds: 3600
+    min_cycle_value_eth: 10
+
+anomaly_detection:
+  volume_spike:
+    enabled: true
+    window_seconds: 300
+    baseline_window_seconds: 3600
+    spike_multiplier: 5
+  gas_spike:
+    enabled: true
+    rolling_window_seconds: 600
+    spike_multiplier: 3
+
+alerting:
+  cooldown_seconds: 60             # dedup window per alert type
+  channels:
+    discord:
+      enabled: "${DISCORD_WEBHOOK_URL:false}"
+      webhook_url: "${DISCORD_WEBHOOK_URL}"
+    slack:
+      enabled: "${SLACK_WEBHOOK_URL:false}"
+      webhook_url: "${SLACK_WEBHOOK_URL}"
+
+storage:
+  retention_days: 30
+  batch_insert_size: 100
+  batch_flush_interval_seconds: 5
+
+metrics:
+  port: 8000
+  path: /metrics
+
+dashboard:
+  refresh_rate_seconds: 1
+  max_tx_display: 50
+  show_recirculation: true
