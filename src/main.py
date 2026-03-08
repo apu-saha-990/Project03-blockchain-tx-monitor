@@ -1,4 +1,4 @@
-"""Main entrypoint — Phase 5: Rich terminal dashboard."""
+"""Main entrypoint — Phase 6: Prometheus metrics wired in."""
 
 from __future__ import annotations
 
@@ -14,6 +14,13 @@ from src.analysis.anomaly import VolumeAnomalyDetector, GasAnomalyDetector
 from src.analysis.recirculation import RecirculationDetector, Transfer
 from src.storage.db import Database, TransactionRecord, BlockRecord, AnomalyRecord
 from src.dashboard.dashboard import Dashboard
+from src.metrics.metrics import (
+    start_metrics_server,
+    TX_TOTAL, TX_FILTERED, WHALE_TOTAL, LARGE_TOTAL, PRIVATE_TOTAL,
+    ANOMALY_TOTAL, RECIRC_TOTAL, BLOCK_TOTAL,
+    ETH_PRICE, TX_PER_SECOND, AVG_GAS_GWEI, LATEST_BLOCK,
+    TX_VALUE_ETH, GAS_PRICE_GWEI,
+)
 
 load_dotenv()
 logging.basicConfig(level=logging.WARNING)
@@ -37,14 +44,30 @@ def on_transaction(tx: RawTransaction) -> None:
     if not result:
         return
 
-    # Update price in dashboard
+    # ── Prometheus metrics ────────────────────────────────────────────────
+    TX_TOTAL.labels(chain="ethereum").inc()
+    TX_FILTERED.labels(level=result.alert_level).inc()
+    TX_VALUE_ETH.observe(result.value.value_eth)
+
+    if result.gas.gas_price_gwei > 0:
+        GAS_PRICE_GWEI.observe(result.gas.gas_price_gwei)
+        AVG_GAS_GWEI.set(result.gas.gas_price_gwei)
+
+    if "WHALE" in result.tags:
+        WHALE_TOTAL.inc()
+    if "LARGE_TX" in result.tags:
+        LARGE_TOTAL.inc()
+    if "PRIVATE_TX" in result.tags:
+        PRIVATE_TOTAL.inc()
+
+    # ── Dashboard ─────────────────────────────────────────────────────────
     if price_feed and price_feed.eth_usd:
         dashboard.update_price(price_feed.eth_usd)
+        ETH_PRICE.set(price_feed.eth_usd)
 
     usd = price_feed.eth_to_usd(result.value.value_eth) if price_feed else "n/a"
     gas_usd = price_feed.eth_to_usd(result.gas.gas_cost_eth) if price_feed else "n/a"
 
-    # Send to dashboard
     dashboard.add_transaction({
         "hash": tx.tx_hash,
         "eth": result.value.value_eth,
@@ -55,6 +78,8 @@ def on_transaction(tx: RawTransaction) -> None:
         "tags": " ".join(f"[{t}]" for t in result.tags),
         "level": result.alert_level,
     })
+
+    TX_PER_SECOND.set(dashboard.state.tx_per_second)
 
     if result.gas.gas_price_gwei > 0:
         dashboard.update_gas(result.gas.gas_price_gwei)
@@ -74,9 +99,10 @@ def on_transaction(tx: RawTransaction) -> None:
             status="pending",
         )))
 
-    # ── Volume anomaly ────────────────────────────────────────────────────
+    # ── Anomaly detection ─────────────────────────────────────────────────
     vol_anomaly = volume_detector.record()
     if vol_anomaly.is_anomaly:
+        ANOMALY_TOTAL.labels(type="VOLUME_SPIKE").inc()
         dashboard.add_anomaly(
             vol_anomaly.anomaly_type or "VOLUME_SPIKE",
             f"{vol_anomaly.description} | x{vol_anomaly.spike_multiplier:.1f}",
@@ -89,9 +115,9 @@ def on_transaction(tx: RawTransaction) -> None:
                 description=vol_anomaly.description,
             )))
 
-    # ── Gas anomaly ───────────────────────────────────────────────────────
     gas_anomaly = gas_detector.record(result.gas.gas_price_gwei)
     if gas_anomaly.is_anomaly:
+        ANOMALY_TOTAL.labels(type="HIGH_GAS").inc()
         dashboard.add_anomaly(
             gas_anomaly.anomaly_type or "HIGH_GAS",
             gas_anomaly.description,
@@ -107,6 +133,7 @@ def on_transaction(tx: RawTransaction) -> None:
         )
         recirc = recirc_detector.record(transfer)
         if recirc:
+            RECIRC_TOTAL.inc()
             usd_r = price_feed.eth_to_usd(recirc.total_value_eth) if price_feed else "n/a"
             dashboard.add_recirculation(recirc.hop_count, recirc.total_value_eth, usd_r)
             if db:
@@ -121,6 +148,8 @@ def on_transaction(tx: RawTransaction) -> None:
 
 
 def on_block(block: RawBlock) -> None:
+    BLOCK_TOTAL.labels(chain="ethereum").inc()
+    LATEST_BLOCK.labels(chain="ethereum").set(block.block_number)
     dashboard.update_block(block.block_number, block.gas_used)
     if db:
         asyncio.create_task(db.insert_block(BlockRecord(
@@ -141,14 +170,20 @@ async def main() -> None:
     ws_url = os.getenv("ALCHEMY_WS_URL")
     cmc_key = os.getenv("COINMARKETCAP_API_KEY")
     db_url = os.getenv("DATABASE_URL")
+    metrics_port = int(os.getenv("PROMETHEUS_PORT", "8000"))
 
     if not ws_url:
         raise ValueError("ALCHEMY_WS_URL not set in .env")
 
+    # ── Start Prometheus metrics server ───────────────────────────────────
+    start_metrics_server(port=metrics_port)
+
+    # ── Database ──────────────────────────────────────────────────────────
     if db_url:
         db = Database(dsn=db_url)
         await db.connect()
 
+    # ── Price feed ────────────────────────────────────────────────────────
     if cmc_key:
         price_feed = PriceFeed(api_key=cmc_key)
         await price_feed.start()
