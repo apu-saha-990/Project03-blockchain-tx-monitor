@@ -5,18 +5,18 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 CREATE TABLE IF NOT EXISTS transactions (
     id              BIGSERIAL,
     ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    chain           TEXT        NOT NULL,          -- 'ethereum' | 'bitcoin'
+    chain           TEXT        NOT NULL,
     tx_hash         TEXT        NOT NULL,
-    block_number    BIGINT,                        -- NULL if still in mempool
+    block_number    BIGINT,
     from_address    TEXT,
     to_address      TEXT,
-    value_wei       NUMERIC(40, 0),               -- ETH: wei, BTC: satoshis
+    value_wei       NUMERIC(40, 0),
     gas_price_wei   NUMERIC(40, 0),
     gas_limit       BIGINT,
     gas_used        BIGINT,
     is_contract     BOOLEAN     DEFAULT FALSE,
-    contract_type   TEXT,                          -- 'erc20' | 'erc721' | 'dex' | NULL
-    status          TEXT        DEFAULT 'pending', -- 'pending' | 'confirmed' | 'dropped'
+    contract_type   TEXT,
+    status          TEXT        DEFAULT 'pending',
     mempool_age_ms  INTEGER,
     raw_data        JSONB,
     PRIMARY KEY (ts, id)
@@ -54,8 +54,8 @@ CREATE TABLE IF NOT EXISTS anomalies (
     id              BIGSERIAL,
     ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     chain           TEXT        NOT NULL,
-    anomaly_type    TEXT        NOT NULL,   -- 'volume_spike' | 'gas_spike' | 'recirculation'
-    severity        TEXT        NOT NULL,   -- 'low' | 'medium' | 'high' | 'critical'
+    anomaly_type    TEXT        NOT NULL,
+    severity        TEXT        NOT NULL,
     description     TEXT,
     tx_hash         TEXT,
     from_address    TEXT,
@@ -70,10 +70,13 @@ CREATE INDEX IF NOT EXISTS idx_anomalies_type ON anomalies (anomaly_type, ts DES
 CREATE INDEX IF NOT EXISTS idx_anomalies_tx   ON anomalies (tx_hash) WHERE tx_hash IS NOT NULL;
 
 -- ── Recirculation Paths ──────────────────────────────────────────────────
+-- NOTE: UNIQUE constraint dropped from path_hash — hypertables cannot have
+-- unique indexes that do not include the partitioning column (ts).
+-- Deduplication is handled at the application layer in recirculation.py.
 CREATE TABLE IF NOT EXISTS recirculation_paths (
     id              BIGSERIAL,
     ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    path_hash       TEXT        NOT NULL UNIQUE,    -- hash of the cycle for dedup
+    path_hash       TEXT        NOT NULL,
     hop_count       INTEGER     NOT NULL,
     total_value_wei NUMERIC(40, 0),
     addresses       TEXT[]      NOT NULL,
@@ -83,6 +86,7 @@ CREATE TABLE IF NOT EXISTS recirculation_paths (
 );
 
 SELECT create_hypertable('recirculation_paths', 'ts', if_not_exists => TRUE);
+CREATE INDEX IF NOT EXISTS idx_recirc_path_hash ON recirculation_paths (path_hash, ts DESC);
 
 -- ── Continuous Aggregates ────────────────────────────────────────────────
 CREATE MATERIALIZED VIEW IF NOT EXISTS tx_1min
@@ -99,8 +103,8 @@ GROUP BY bucket, chain
 WITH NO DATA;
 
 SELECT add_continuous_aggregate_policy('tx_1min',
-    start_offset  => INTERVAL '1 hour',
-    end_offset    => INTERVAL '1 minute',
+    start_offset      => INTERVAL '1 hour',
+    end_offset        => INTERVAL '1 minute',
     schedule_interval => INTERVAL '1 minute',
-    if_not_exists => TRUE
+    if_not_exists     => TRUE
 );
