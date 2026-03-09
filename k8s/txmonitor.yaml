@@ -1,0 +1,72 @@
+# ── Deployment ───────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: txmonitor
+  namespace: txmonitor
+  labels:
+    app: txmonitor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: txmonitor
+  template:
+    metadata:
+      labels:
+        app: txmonitor
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: txmonitor
+          image: ghcr.io/apu-saha-990/txmonitor:latest
+          env:
+            - name: ALCHEMY_WS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: txmonitor-secrets
+                  key: ALCHEMY_WS_URL
+            - name: COINMARKETCAP_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: txmonitor-secrets
+                  key: COINMARKETCAP_API_KEY
+            - name: DATABASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: txmonitor-config
+                  key: DATABASE_URL
+            - name: PROMETHEUS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: txmonitor-config
+                  key: PROMETHEUS_PORT
+          ports:
+            - containerPort: 8000
+              name: metrics
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          restartPolicy: Always
+---
+# ── Service ──────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: txmonitor
+  namespace: txmonitor
+spec:
+  selector:
+    app: txmonitor
+  ports:
+    - port: 8000
+      targetPort: 8000
+      name: metrics
+  type: ClusterIP

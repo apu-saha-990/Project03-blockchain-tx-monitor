@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: txmonitor-config
+  namespace: txmonitor
+data:
+  PROMETHEUS_PORT: "8000"
+  DATABASE_URL: "postgresql://monitor:monitor@timescaledb:5432/txmonitor"
+  LOG_LEVEL: "WARNING"
